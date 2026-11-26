@@ -60,13 +60,36 @@
   .scroll { overflow-x:auto; }
   .note { color:var(--muted); font-size:12px; margin-top:8px; }
   .hide { display:none !important; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .topbar .sub { margin:0; }
+  .refresh { border:1px solid var(--line); background:var(--card); color:var(--ink); padding:7px 12px; border-radius:999px; font:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .refresh:disabled { opacity:.6; cursor:wait; }
+  .tokbox { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px; font-size:14px; }
+  .tokbox input { width:100%; margin:8px 0; padding:9px 12px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; }
+  .tokbox .btns { display:flex; gap:8px; flex-wrap:wrap; }
+  .tokbox button { padding:8px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); font:inherit; cursor:pointer; }
+  .tokbox button.primary { background:var(--local); color:#fff; border-color:var(--local); font-weight:600; }
+  .pin { border:2px solid var(--home); border-radius:10px; padding:8px 10px !important; margin-bottom:6px; background:color-mix(in srgb, var(--home) 6%, transparent); }
+  .stamp { font-size:12px; font-weight:500; color:var(--muted); display:block; margin-top:2px; }
   @media (max-width:600px) { .chart { height:220px; } .kpi .val { font-size:24px; } main { padding:10px 12px 40px; } }
 </style>
 </head>
 <body>
 <main>
   <h1>Sprit-Tracker Berlin</h1>
-  <div class="sub" id="sub">Lade Daten …</div>
+  <div class="topbar">
+    <div class="sub" id="sub">Lade Daten …</div>
+    <button class="refresh" id="refresh" type="button">↻ Aktualisieren</button>
+  </div>
+  <div class="tokbox hide" id="tokbox">
+    <b>Live-Abruf bei GitHub starten</b><br>
+    Damit der Button einen neuen Preisabruf anstoßen kann, braucht er einmalig einen GitHub-Token. Er wird nur auf diesem Gerät gespeichert.
+    <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Token erstellen</a>:
+    Repository access → „Only select repositories“ → <i>diesel-tracker-berlin</i>, Permissions → <i>Actions: Read and write</i>.
+    <input id="tok" type="password" placeholder="github_pat_…" autocomplete="off">
+    <div class="btns"><button class="primary" id="toksave" type="button">Speichern &amp; abrufen</button>
+      <button id="reloadonly" type="button">Nur Seite neu laden</button><button id="tokcancel" type="button">Abbrechen</button></div>
+  </div>
 
   <div class="controls">
     <div class="seg" id="fuels">
@@ -125,16 +148,59 @@ const set = (id, html, c) => { const e = $(id); e.innerHTML = html; if (c !== un
 let D = null, L = null, charts = [];
 const st = { fuel: "diesel", center: null, label: "", custom: false, rad: 5 };
 
-Promise.all([fetch("data.json", { cache: "no-store" }).then(r => r.json()),
-             fetch("latest.json", { cache: "no-store" }).then(r => r.ok ? r.json() : null).catch(() => null)])
-  .then(([d, l]) => {
-    D = d; L = l;
-    const hs = D.home_station;
-    st.center = { lat: hs.lat, lng: hs.lng }; st.label = `Heim-Tankstelle (${hs.brand || ""} ${hs.address || ""})`;
-    const t = new Date((L && L.ts) || D.generated);
-    set("sub", `Letzte Erhebung ${t.toLocaleString("de-DE", { weekday:"short", day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" })}`);
-    render();
-  }).catch(e => set("sub", "Keine Daten gefunden – läuft der GitHub-Workflow schon? (" + e.message + ")"));
+const REPO = "mwiemi-dotcom/diesel-tracker-berlin", WF = "collect.yml";
+const fmtTs = ts => new Date(ts).toLocaleString("de-DE", { weekday:"short", day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" }) + " Uhr";
+const tokGet = () => { try { return localStorage.getItem("gh_tok") || ""; } catch (e) { return ""; } };
+const tokSet = v => { try { v ? localStorage.setItem("gh_tok", v) : localStorage.removeItem("gh_tok"); } catch (e) {} };
+const gh = (path, opt = {}) => fetch("https://api.github.com/repos/" + REPO + path, { ...opt,
+  headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tokGet(), "X-GitHub-Api-Version": "2022-11-28", ...(opt.headers || {}) } });
+
+async function loadData(viaApi) {
+  const get = async f => {
+    if (viaApi && tokGet()) {
+      const r = await gh(`/contents/docs/${f}?ref=main&t=${Date.now()}`, { headers: { Accept: "application/vnd.github.raw+json" }, cache: "no-store" });
+      if (r.ok) return r.json();
+    }
+    const r = await fetch(f + "?t=" + Date.now(), { cache: "no-store" });
+    return r.ok ? r.json() : null;
+  };
+  const [d, l] = await Promise.all([get("data.json"), get("latest.json").catch(() => null)]);
+  if (!d) throw new Error("data.json fehlt");
+  D = d; L = l;
+  if (!st.custom) { const hs = D.home_station; st.center = { lat: hs.lat, lng: hs.lng }; st.label = `Heim-Tankstelle (${hs.brand || ""} ${hs.address || ""})`; }
+  set("sub", `Letzte Erhebung: <b>${fmtTs((L && L.ts) || D.generated)}</b>`);
+  render();
+}
+loadData(false).catch(e => set("sub", "Keine Daten gefunden – läuft der GitHub-Workflow schon? (" + e.message + ")"));
+
+const btn = $("refresh");
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function runRefresh() {
+  btn.disabled = true;
+  try {
+    const t0 = Date.now() - 5000;
+    btn.textContent = "↻ Starte Abruf …";
+    const r = await gh(`/actions/workflows/${WF}/dispatches`, { method: "POST", body: JSON.stringify({ ref: "main" }) });
+    if (r.status === 401 || r.status === 403 || r.status === 404) { tokSet(""); btn.textContent = "↻ Aktualisieren"; btn.disabled = false; $("tokbox").classList.remove("hide"); set("sub", "Token ungültig oder ohne Actions-Recht – bitte neu eintragen."); return; }
+    let run = null;
+    for (let i = 0; i < 40; i++) {
+      await sleep(i < 2 ? 4000 : 3000);
+      const j = await (await gh(`/actions/workflows/${WF}/runs?event=workflow_dispatch&per_page=3&t=${Date.now()}`, { cache: "no-store" })).json();
+      run = (j.workflow_runs || []).find(x => new Date(x.created_at).getTime() >= t0);
+      btn.textContent = !run ? "↻ Warte auf GitHub …" : run.status === "completed" ? "↻ Lade Daten …" : "↻ Hole Preise …";
+      if (run && run.status === "completed") break;
+    }
+    if (!run || run.conclusion !== "success") throw new Error(run ? "Abruf fehlgeschlagen" : "Zeitüberschreitung");
+    await sleep(1500);
+    await loadData(true);
+    btn.textContent = "✓ Aktuell"; setTimeout(() => { btn.textContent = "↻ Aktualisieren"; }, 4000);
+  } catch (e) { btn.textContent = "↻ Aktualisieren"; set("sub", "Aktualisierung fehlgeschlagen: " + esc(e.message)); }
+  btn.disabled = false;
+}
+btn.addEventListener("click", () => tokGet() ? runRefresh() : $("tokbox").classList.toggle("hide"));
+$("toksave").addEventListener("click", () => { const v = $("tok").value.trim(); if (!v) return; tokSet(v); $("tok").value = ""; $("tokbox").classList.add("hide"); runRefresh(); });
+$("reloadonly").addEventListener("click", () => { $("tokbox").classList.add("hide"); loadData(false).catch(() => {}); });
+$("tokcancel").addEventListener("click", () => $("tokbox").classList.add("hide"));
 
 $("fuels").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
@@ -173,33 +239,39 @@ function render() { renderNear(); renderHistory(); }
 function renderNear() {
   $("reset").classList.toggle("hide", !st.custom);
   set("where", `Mittelpunkt: <b>${esc(st.label)}</b> · Radius ${st.rad} km`);
-  set("near-h", st.fuel === "ev" ? "Ladesäulen im Umkreis" : `${FUEL_NAME[st.fuel]} im Umkreis – Stand letzte Erhebung`);
+  set("near-h", st.fuel === "ev" ? `Ladesäulen im Umkreis<span class="stamp">Live aus OpenStreetMap</span>`
+  : `${FUEL_NAME[st.fuel]} im Umkreis<span class="stamp">Preisstand: ${L ? fmtTs(L.ts) : "–"}</span>`);
   $("best").classList.add("hide");
   if (st.fuel === "ev") return renderEV();
   if (!L) { set("near", ""); set("near-note", "Umkreissuche verfügbar ab dem nächsten Stundenlauf."); return; }
   const c = st.center, f = st.fuel;
   const home = L.stations.find(s => s.id === L.home_id);
   const rows = L.stations.map(s => ({ ...s, d: hav(c.lat, c.lng, s.lat, s.lng) }))
-    .filter(s => s.d <= st.rad && s[f] != null)
+    .filter(s => s.d <= st.rad && s[f] != null && s.id !== L.home_id)
     .sort((a, b) => (b.open - a.open) || (a[f] - b[f]) || (a.d - b.d));
   const ref = home && home[f] != null ? home[f] : null;
-  const open = rows.filter(s => s.open);
+  const homeD = home ? hav(c.lat, c.lng, home.lat, home.lng) : null;
+  const open = [...rows, ...(home && home.open && home[f] != null && homeD <= st.rad ? [{ ...home, d: homeD }] : [])]
+    .filter(s => s.open).sort((a, b) => (a[f] - b[f]) || (a.d - b.d));
   if (open.length) {
     const b = open[0];
     $("best").href = maps(b.lat, b.lng);
     $("best").textContent = `Günstigste: ${b.brand} ${b.addr} · ${eur(b[f])} → Route`;
     $("best").classList.remove("hide");
   }
-  set("near", rows.length ? rows.map(s => {
-    const dl = ref != null && s.id !== L.home_id ? s[f] - ref : null;
-    return `<div class="row ${s.id === L.home_id ? "home" : ""} ${s.open ? "" : "closed"}">
-      <div class="t">${esc(s.brand) || "Tankstelle"}${s.id === L.home_id ? '<span class="tag">Heim</span>' : ""}${s.open ? "" : '<span class="tag">geschlossen</span>'}</div>
+  const rowHtml = (s, pin) => {
+    const isHome = s.id === L.home_id, dl = ref != null && !isHome ? s[f] - ref : null;
+    const best = open[0], db = pin && best && s[f] != null ? s[f] - best[f] : null;
+    return `<div class="row ${isHome ? "home" : ""} ${pin ? "pin" : ""} ${s.open ? "" : "closed"}">
+      <div class="t">${esc(s.brand) || "Tankstelle"}${isHome ? '<span class="tag">Heim</span>' : ""}${s.open ? "" : '<span class="tag">geschlossen</span>'}</div>
       <div class="a">${esc(s.addr)}, ${esc(s.plz)} · ${km(s.d)}</div>
-      <div class="p">${eur(s[f])}${dl != null ? `<small class="${cls(dl)}">${ct(dl)} vs. Heim</small>` : ""}</div>
+      <div class="p">${eur(s[f])}${dl != null ? `<small class="${cls(dl)}">${ct(dl)} vs. Heim</small>` : ""}${db != null ? `<small class="${cls(db)}">${db <= 0.0005 && s.d <= st.rad ? "günstigste im Umkreis" : ct(db) + " vs. günstigste"}</small>` : ""}</div>
       <div class="go"><a class="nav" href="${maps(s.lat, s.lng)}" target="_blank" rel="noopener">Route</a></div></div>`;
-  }).join("") : `<div class="note">Keine Tankstelle mit ${FUEL_NAME[f]}-Preis im Umkreis von ${st.rad} km.</div>`);
+  };
+  const homeRow = home && home[f] != null ? rowHtml({ ...home, d: homeD }, true) : "";
+  set("near", homeRow + (rows.length ? rows.map(s => rowHtml(s, false)).join("") : `<div class="note">Keine weitere Tankstelle mit ${FUEL_NAME[f]}-Preis im Umkreis von ${st.rad} km.</div>`));
   const far = hav(52.517, 13.405, c.lat, c.lng) > 20;
-  set("near-note", `${open.length} geöffnet von ${rows.length} Tankstellen. ` +
+  set("near-note", `${open.length} geöffnet von ${rows.length + (home && homeD <= st.rad ? 1 : 0)} Tankstellen im Umkreis. ` + (home && homeD > st.rad ? "Heim-Tankstelle liegt außerhalb des Radius und ist nur zum Vergleich oben angeheftet. " : "") +
     (far ? "Achtung: Mittelpunkt liegt am Rand der Abdeckung (ca. 25 km um Berlin-Mitte) – Liste evtl. unvollständig." : ""));
 }
 
