@@ -12,7 +12,7 @@ def r3(x):
     return None if x is None else round(x, 3)
 
 
-def fuel_summary(fuel, berlin_rows, local_rows, stations, home_id):
+def fuel_summary(fuel, berlin_rows, local_rows, stations, home_id, used):
     berlin = {parse_ts(r["ts"]): r for r in berlin_rows if r["fuel"] == fuel}
     local = defaultdict(dict)
     for r in local_rows:
@@ -23,8 +23,14 @@ def fuel_summary(fuel, berlin_rows, local_rows, stations, home_id):
         return None
 
     hourly = []
+    win_b, win_l = {}, {}   # ts -> [ids] mit Tiefpreis
     for t in all_ts:
         lp, b = local.get(t, {}), berlin.get(t)
+        if b and b.get("min_ids"):
+            win_b[t] = b["min_ids"].split(";")
+        if lp:
+            m = min(lp.values())
+            win_l[t] = sorted(i for i, p in lp.items() if abs(p - m) < 0.0005)
         hourly.append({
             "ts": t.isoformat(timespec="minutes"),
             "home": lp.get(home_id),
@@ -41,6 +47,20 @@ def fuel_summary(fuel, berlin_rows, local_rows, stations, home_id):
     for day in sorted(by_day):
         hs = by_day[day]
         home = [(h["home"], h["ts"][11:16]) for h in hs if h["home"] is not None]
+        lmin_t = min(((h["local_min"], h["ts"]) for h in hs if h["local_min"] is not None), default=None)
+        bmin_t = min(((h["berlin_min"], h["ts"]) for h in hs if h["berlin_min"] is not None), default=None)
+        def ids_at(minv, key, win):
+            if minv is None:
+                return []
+            for h in hs:   # früheste Stunde mit Tiefpreis, für die die Tankstelle bekannt ist
+                if h[key] is not None and abs(h[key] - minv[0]) < 0.0005:
+                    got = win.get(datetime.fromisoformat(h["ts"]))
+                    if got:
+                        return got
+            return []
+        l_ids = ids_at(lmin_t, "local_min", win_l)
+        b_ids = ids_at(bmin_t, "berlin_min", win_b)
+        used.update(l_ids[:1] + b_ids[:1])
         lmin = [h["local_min"] for h in hs if h["local_min"] is not None]
         bmin = [h["berlin_min"] for h in hs if h["berlin_min"] is not None]
         bmed = [h["berlin_median"] for h in hs if h["berlin_median"] is not None]
@@ -53,6 +73,8 @@ def fuel_summary(fuel, berlin_rows, local_rows, stations, home_id):
             "local_min": min(lmin) if lmin else None,
             "berlin_min": min(bmin) if bmin else None,
             "berlin_median_avg": r3(statistics.fmean(bmed)) if bmed else None,
+            "local_min_id": l_ids[0] if l_ids else None, "local_min_n": len(l_ids),
+            "berlin_min_id": b_ids[0] if b_ids else None, "berlin_min_n": len(b_ids),
             "hours": len(hs),
         })
 
@@ -74,6 +96,21 @@ def fuel_summary(fuel, berlin_rows, local_rows, stations, home_id):
                for hr in range(24)]
 
     last_t, last = all_ts[-1], hourly[-1]
+    since = last_t - timedelta(days=30)
+
+    def ranking(win):
+        hrs = [t for t in win if t >= since]
+        cnt, lastseen = defaultdict(int), {}
+        for t in hrs:
+            for i in win[t]:
+                cnt[i] += 1
+                lastseen[i] = t
+        top = sorted(cnt.items(), key=lambda kv: (-kv[1], -lastseen[kv[0]].timestamp()))[:5]
+        used.update(i for i, _ in top)
+        return {"hours": len(hrs), "top": [{"id": i, "hours": n, "share": round(100 * n / len(hrs)),
+                                            "last": lastseen[i].isoformat(timespec="minutes")} for i, n in top]}
+    winners = {"berlin": ranking(win_b), "local": ranking(win_l),
+               "days": len({t.date() for t in all_ts if t >= since})}
     week = [h["home"] for h in hourly
             if h["home"] is not None and datetime.fromisoformat(h["ts"]) >= last_t - timedelta(days=7)]
     week.sort()
@@ -93,6 +130,7 @@ def fuel_summary(fuel, berlin_rows, local_rows, stations, home_id):
         "hourly_14d": [h for h in hourly if datetime.fromisoformat(h["ts"]) >= last_t - timedelta(days=14)],
         "daily": daily[-90:],
         "hour_profile": profile,
+        "winners": winners,
     }
 
 
@@ -102,7 +140,16 @@ def main():
     stations = load_stations()
     home_id = next((k for k, v in stations.items() if v.get("home")), None)
     berlin_rows, local_rows = read_csv(BERLIN_FILE), read_csv(LOCAL_FILE)
-    fuels = {f: s for f in FUELS if (s := fuel_summary(f, berlin_rows, local_rows, stations, home_id))}
+    used = set()
+    fuels = {f: s for f in FUELS if (s := fuel_summary(f, berlin_rows, local_rows, stations, home_id, used))}
+    ref = {}
+    for i in used:
+        s = stations.get(i)
+        if s:
+            ref[i] = {"brand": (s.get("brand") or s.get("name") or "").strip(),
+                      "addr": f"{(s.get('street') or '').strip()} {(s.get('houseNumber') or '').strip()}".strip(),
+                      "plz": str(s.get("postCode") or ""), "place": (s.get("place") or "").strip(),
+                      "lat": s["lat"], "lng": s["lng"], "dist_home_km": s.get("dist_home_km")}
     if not fuels:
         raise SystemExit("Keine Daten vorhanden.")
     hs = stations.get(home_id, {})
@@ -113,6 +160,7 @@ def main():
         "home_station": {"id": home_id, "brand": hs.get("brand"), "lat": hs.get("lat"), "lng": hs.get("lng"),
                          "address": f"{hs.get('street') or ''} {hs.get('houseNumber') or ''}, {hs.get('postCode') or ''} {hs.get('place') or ''}".strip()},
         "fuels": fuels,
+        "ref": ref,
     }
     DOCS.mkdir(exist_ok=True)
     (DOCS / "data.json").write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

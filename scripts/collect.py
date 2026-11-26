@@ -80,7 +80,7 @@ def main():
         if is_berlin(s):
             for f in FUELS:
                 if prices[f]:
-                    berlin_prices[f].append(prices[f])
+                    berlin_prices[f].append((prices[f], s["id"]))
         if local and any(prices.values()):
             local_rows.append({"ts": ts, "station_id": s["id"], **{f: prices[f] or "" for f in FUELS}})
 
@@ -89,7 +89,12 @@ def main():
         st["home"] = st["id"] == home_id
     save_stations(stations)
 
-    berlin_rows = [{"ts": ts, "fuel": f, **st} for f in FUELS if (st := price_stats(berlin_prices[f]))]
+    berlin_rows = []
+    for f in FUELS:
+        st = price_stats([p for p, _ in berlin_prices[f]])
+        if st:
+            ids = sorted(i for p, i in berlin_prices[f] if abs(p - st["min"]) < 0.0005)
+            berlin_rows.append({"ts": ts, "fuel": f, **st, "min_ids": ";".join(ids)})
     upsert_csv(BERLIN_FILE, BERLIN_COLS, berlin_rows, ["ts", "fuel"])
     upsert_csv(LOCAL_FILE, LOCAL_COLS, local_rows, ["ts", "station_id"])
 

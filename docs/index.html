@@ -70,6 +70,18 @@
   .tokbox button { padding:8px 12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink); font:inherit; cursor:pointer; }
   .tokbox button.primary { background:var(--local); color:#fff; border-color:var(--local); font-weight:600; }
   .pin { border:2px solid var(--home); border-radius:10px; padding:8px 10px !important; margin-bottom:6px; background:color-mix(in srgb, var(--home) 6%, transparent); }
+  .mini { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:700px) { .mini { grid-template-columns:1fr; } }
+  .mini h3 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 4px; font-weight:600; }
+  .rk { display:grid; grid-template-columns:22px 1fr auto; gap:2px 8px; align-items:center; padding:7px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .rk:last-child { border-bottom:0; }
+  .rk .n { color:var(--muted); font-weight:700; grid-row:1 / span 2; }
+  .rk .s { font-size:12px; color:var(--muted); grid-column:2; }
+  .rk .v { grid-row:1 / span 2; grid-column:3; text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+  .rk .v small { display:block; font-weight:500; font-size:12px; }
+  td small { display:block; font-size:11px; color:var(--muted); font-weight:400; }
+  .bigline { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+  .bigline .pr { font-size:26px; font-weight:650; font-variant-numeric:tabular-nums; }
   .stamp { font-size:12px; font-weight:500; color:var(--muted); display:block; margin-top:2px; }
   @media (max-width:600px) { .chart { height:220px; } .kpi .val { font-size:24px; } main { padding:10px 12px 40px; } }
 </style>
@@ -112,6 +124,8 @@
     <div class="note" id="near-note"></div>
   </div>
 
+  <div class="card hide" id="bcard"></div>
+
   <div id="history">
     <h2 style="margin:18px 0 10px" id="hist-h">Heim-Tankstelle im Verlauf</h2>
     <div class="grid">
@@ -123,6 +137,7 @@
     </div>
     <div class="card"><h2>Stündlicher Verlauf · 14 Tage</h2><div class="chart"><canvas id="c-hourly"></canvas></div></div>
     <div class="card"><h2>Tagestief pro Tag</h2><div class="chart"><canvas id="c-daily"></canvas></div></div>
+    <div class="card" id="wcard"></div>
     <div class="card"><h2>Typischer Tagesverlauf (Ø Abweichung vom Tagesmittel, 28 Tage)</h2>
       <div class="chart"><canvas id="c-profile"></canvas></div>
       <div class="note">Negativ = günstiger als der Tagesdurchschnitt. Die tiefsten Balken zeigen die beste Tankzeit.</div></div>
@@ -146,6 +161,8 @@ const $ = id => document.getElementById(id);
 const set = (id, html, c) => { const e = $(id); e.innerHTML = html; if (c !== undefined) e.className = e.className.replace(/\b(good|bad)\b/g, "") + " " + c; };
 
 let D = null, L = null, charts = [];
+const refSt = id => (D && D.ref && D.ref[id]) || null;
+const stName = id => { const r = refSt(id); return r ? `${r.brand} ${r.addr}` : ""; };
 const st = { fuel: "diesel", center: null, label: "", custom: false, rad: 5 };
 
 const REPO = "mwiemi-dotcom/diesel-tracker-berlin", WF = "collect.yml";
@@ -242,7 +259,9 @@ function renderNear() {
   set("near-h", st.fuel === "ev" ? `Ladesäulen im Umkreis<span class="stamp">Live aus OpenStreetMap</span>`
   : `${FUEL_NAME[st.fuel]} im Umkreis<span class="stamp">Preisstand: ${L ? fmtTs(L.ts) : "–"}</span>`);
   $("best").classList.add("hide");
+  $("bcard").classList.toggle("hide", st.fuel === "ev" || !L);
   if (st.fuel === "ev") return renderEV();
+  renderBerlinLow();
   if (!L) { set("near", ""); set("near-note", "Umkreissuche verfügbar ab dem nächsten Stundenlauf."); return; }
   const c = st.center, f = st.fuel;
   const home = L.stations.find(s => s.id === L.home_id);
@@ -273,6 +292,39 @@ function renderNear() {
   const far = hav(52.517, 13.405, c.lat, c.lng) > 20;
   set("near-note", `${open.length} geöffnet von ${rows.length + (home && homeD <= st.rad ? 1 : 0)} Tankstellen im Umkreis. ` + (home && homeD > st.rad ? "Heim-Tankstelle liegt außerhalb des Radius und ist nur zum Vergleich oben angeheftet. " : "") +
     (far ? "Achtung: Mittelpunkt liegt am Rand der Abdeckung (ca. 25 km um Berlin-Mitte) – Liste evtl. unvollständig." : ""));
+}
+
+function renderBerlinLow() {
+  if (!L) return;
+  const f = st.fuel, c = st.center, home = L.stations.find(s => s.id === L.home_id);
+  const pool = L.stations.filter(s => s.open && s[f] != null && /^berlin/i.test(s.place || ""));
+  if (!pool.length) { $("bcard").classList.add("hide"); return; }
+  const m = Math.min(...pool.map(s => s[f]));
+  const tops = pool.filter(s => Math.abs(s[f] - m) < 0.0005)
+    .map(s => ({ ...s, dh: home ? hav(home.lat, home.lng, s.lat, s.lng) : null, dc: hav(c.lat, c.lng, s.lat, s.lng) }))
+    .sort((a, b) => a.dc - b.dc);
+  const t = tops[0], dl = home && home[f] != null ? m - home[f] : null;
+  const dist = s => [s.dh != null ? km(s.dh) + " von Heim" : "", st.custom ? km(s.dc) + " vom Suchpunkt" : ""].filter(Boolean).join(" · ");
+  set("bcard", `<h2>Berlin-Tiefstpreis ${FUEL_NAME[f]}<span class="stamp">Preisstand: ${fmtTs(L.ts)} · günstigste geöffnete Tankstelle in ganz Berlin</span></h2>
+    <div class="bigline"><div><div class="t" style="font-weight:600">${esc(t.brand)} · ${esc(t.addr)}, ${esc(t.plz)} ${esc(t.place)}</div>
+      <div class="a" style="color:var(--muted);font-size:13px">${dist(t)}</div></div>
+      <div style="text-align:right"><div class="pr">${eur(m)}</div>${dl != null ? `<div class="${cls(dl)}" style="font-size:13px">${ct(dl)} vs. Heim</div>` : ""}</div>
+      <a class="nav" href="${maps(t.lat, t.lng)}" target="_blank" rel="noopener">Route</a></div>
+    ${tops.length > 1 ? `<div class="note">Gleicher Preis auch bei: ${tops.slice(1, 6).map(s => `${esc(s.brand)} ${esc(s.addr)} (${esc(s.plz)}${s.dh != null ? ", " + km(s.dh) : ""})`).join(" · ")}${tops.length > 6 ? ` und ${tops.length - 6} weiteren` : ""}</div>` : ""}`);
+}
+
+function renderWinners(F) {
+  const W = F.winners;
+  if (!W) { $("wcard").classList.add("hide"); return; }
+  $("wcard").classList.remove("hide");
+  const list = (w, label) => `<div><h3>${label}</h3>${w.top.length ? w.top.map((x, i) => {
+    const r = refSt(x.id) || {};
+    return `<div class="rk"><div class="n">${i + 1}</div><div>${esc(r.brand || "Tankstelle")} · ${esc(r.addr || "")}</div>
+      <div class="v">${x.share} %<small>${x.hours} von ${w.hours} h</small></div>
+      <div class="s">${esc(r.plz || "")} ${esc(r.place || "")}${r.dist_home_km != null ? " · " + km(r.dist_home_km) + " von Heim" : ""} · zuletzt ${new Date(x.last).toLocaleString("de-DE", { day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" })}${r.lat ? ` · <a href="${maps(r.lat, r.lng)}" target="_blank" rel="noopener">Route</a>` : ""}</div></div>`;
+  }).join("") : '<div class="note">Noch keine Daten.</div>'}</div>`;
+  set("wcard", `<h2>Preissieger · letzte ${Math.min(W.days, 30)} ${W.days === 1 ? "Tag" : "Tage"}<span class="stamp">Anteil der erfassten Stunden, in denen die Tankstelle den Tiefpreis hatte (bei Gleichstand zählen alle)</span></h2>
+    <div class="mini">${list(W.berlin, "Ganz Berlin")}${list(W.local, `Umkreis ${D.local_radius_km} km um Heim`)}</div>`);
 }
 
 let evReq = 0;
@@ -309,6 +361,7 @@ function renderHistory() {
   $("history").classList.toggle("hide", !F);
   if (!F) return;
   set("hist-h", `Heim-Tankstelle im Verlauf · ${FUEL_NAME[st.fuel]}`);
+  renderWinners(F);
   const n = F.now;
   set("k-now", eur(n.home));
   const today = F.daily[F.daily.length - 1];
@@ -354,7 +407,7 @@ function renderHistory() {
     options: { maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y > 0 ? "+" : ""}${c.parsed.y.toFixed(1).replace(".", ",")} ct` } } },
                scales: { y: { ticks: { callback: v => v + " ct" } } } } }));
   $("t-daily").innerHTML = `<tr><th>Tag</th><th>Heim Tief</th><th>um</th><th>Heim Hoch</th><th>Heim Ø</th><th>Umkreis Tief</th><th>Berlin Tief</th><th>Berlin Ø Median</th></tr>` +
-    Dd.slice(-21).reverse().map(d => `<tr><td>${dDE(d.date)}</td><td>${eur(d.home_min)}</td><td>${d.home_min_time || "–"}</td><td>${eur(d.home_max)}</td><td>${eur(d.home_avg)}</td><td>${eur(d.local_min)}</td><td>${eur(d.berlin_min)}</td><td>${eur(d.berlin_median_avg)}</td></tr>`).join("");
+    Dd.slice(-21).reverse().map(d => `<tr><td>${dDE(d.date)}</td><td>${eur(d.home_min)}</td><td>${d.home_min_time || "–"}</td><td>${eur(d.home_max)}</td><td>${eur(d.home_avg)}</td><td>${eur(d.local_min)}${d.local_min_id ? `<small>${esc(stName(d.local_min_id))}${d.local_min_n > 1 ? ` +${d.local_min_n - 1}` : ""}</small>` : ""}</td><td>${eur(d.berlin_min)}${d.berlin_min_id ? `<small>${esc(stName(d.berlin_min_id))}${d.berlin_min_n > 1 ? ` +${d.berlin_min_n - 1}` : ""}</small>` : ""}</td><td>${eur(d.berlin_median_avg)}</td></tr>`).join("");
 }
 </script>
 </body>

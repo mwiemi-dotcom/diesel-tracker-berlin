@@ -17,7 +17,7 @@ BERLIN_FILE = DATA / "berlin_hourly.csv"    # ts, fuel, n, min, p25, median, mea
 
 FUELS = ["diesel", "e5", "e10"]
 LOCAL_COLS = ["ts", "station_id", *FUELS]
-BERLIN_COLS = ["ts", "fuel", "n", "min", "p25", "median", "mean"]
+BERLIN_COLS = ["ts", "fuel", "n", "min", "p25", "median", "mean", "min_ids"]
 
 
 def load_config():
