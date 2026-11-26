@@ -1,0 +1,19 @@
+{
+  "home": {
+    "label": "Berlin-Ost",
+    "lat": 52.48,
+    "lng": 13.52
+  },
+  "home_station_id": null,
+  "home_station_match": {
+    "brand": "shell",
+    "street": "blockdamm"
+  },
+  "local_radius_km": 5,
+  "berlin": {
+    "lat": 52.517,
+    "lng": 13.405,
+    "rad_km": 25
+  },
+  "backfill_days": 60
+}

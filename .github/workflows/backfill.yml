@@ -1,0 +1,42 @@
+name: Historie nachladen (Backfill)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Wie viele Tage zurück?"
+        default: "60"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Stationsliste sicherstellen
+        if: hashFiles('data/stations.json') == ''
+        env: { TK_API_KEY: "${{ secrets.TK_API_KEY }}" }
+        run: python scripts/collect.py
+      - name: Historie aus Tankerkönig-Archiv
+        env:
+          TK_GIT_USER: "${{ secrets.TK_GIT_USER }}"
+          TK_GIT_PASS: "${{ secrets.TK_GIT_PASS }}"
+        run: python scripts/backfill.py "${{ github.event.inputs.days }}"
+      - name: Dashboard-Daten bauen
+        run: python scripts/build_summary.py
+      - name: Committen
+        run: |
+          git config user.name "diesel-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data docs/data.json
+          git diff --cached --quiet || git commit -m "Backfill ${{ github.event.inputs.days }} Tage"
+          git pull --rebase && git push

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diesel-Tracker Berlin</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d232b; --muted:#6b7480; --line:#e3e6ea;
+          --home:#d9480f; --local:#1c7ed6; --berlin:#5c636e; --good:#2b8a3e; --bad:#c92a2a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171b; --card:#1d2127; --ink:#e8eaed; --muted:#9aa3ad; --line:#2c323a;
+            --home:#ff8a4c; --local:#5aa9f0; --berlin:#a6adb7; --good:#51cf66; --bad:#ff6b6b; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:1100px; margin:0 auto; padding:20px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 2px; } h2 { font-size:16px; margin:0 0 10px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:18px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-bottom:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:12px; }
+  .kpi .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .kpi .val { font-size:28px; font-weight:650; font-variant-numeric:tabular-nums; margin-top:2px; }
+  .kpi .hint { font-size:13px; color:var(--muted); }
+  .good { color:var(--good); } .bad { color:var(--bad); }
+  .bar { height:8px; border-radius:4px; background:linear-gradient(90deg,var(--good),#f0c419,var(--bad)); position:relative; margin:10px 0 4px; }
+  .bar i { position:absolute; top:-4px; width:4px; height:16px; background:var(--ink); border-radius:2px; transform:translateX(-2px); }
+  .chart { position:relative; height:280px; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; font-size:14px; }
+  th, td { text-align:right; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:500; font-size:12px; }
+  tr.home td { color:var(--home); font-weight:600; }
+  .scroll { overflow-x:auto; }
+  .note { color:var(--muted); font-size:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Diesel-Tracker Berlin</h1>
+  <div class="sub" id="sub">Lade Daten …</div>
+
+  <div class="grid">
+    <div class="card kpi"><div class="label">Jetzt · Heim-Tankstelle</div><div class="val" id="k-now">–</div><div class="hint" id="k-now-h"></div></div>
+    <div class="card kpi"><div class="label">vs. günstigste im Umkreis</div><div class="val" id="k-loc">–</div><div class="hint" id="k-loc-h"></div></div>
+    <div class="card kpi"><div class="label">vs. Berlin (Median)</div><div class="val" id="k-ber">–</div><div class="hint" id="k-ber-h"></div></div>
+    <div class="card kpi"><div class="label">Einordnung 7 Tage</div><div class="val" id="k-sig">–</div>
+      <div class="bar"><i id="k-sig-m" style="left:50%"></i></div><div class="hint" id="k-sig-h"></div></div>
+  </div>
+
+  <div class="card"><h2>Stündlicher Verlauf · 14 Tage</h2><div class="chart"><canvas id="c-hourly"></canvas></div></div>
+  <div class="card"><h2>Tagestief pro Tag</h2><div class="chart"><canvas id="c-daily"></canvas></div></div>
+  <div class="card"><h2>Typischer Tagesverlauf (Ø Abweichung vom Tagesmittel, letzte 28 Tage)</h2>
+    <div class="chart"><canvas id="c-profile"></canvas></div>
+    <div class="note">Negativ = günstiger als der Tagesdurchschnitt. Die tiefsten Balken zeigen die beste Tankzeit.</div></div>
+
+  <div class="card"><h2>Tage im Vergleich</h2><div class="scroll"><table id="t-daily"></table></div></div>
+  <div class="card"><h2>Umkreis jetzt</h2><div class="scroll"><table id="t-local"></table></div>
+    <div class="note">Datenquelle: Markttransparenzstelle für Kraftstoffe via Tankerkönig (CC BY 4.0). Historische Werte aus dem Tankerkönig-Archiv, stündlich rekonstruiert.</div></div>
+</main>
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const eur = p => p == null ? "–" : p.toFixed(3).replace(".", ",") + " €";
+const ct = d => d == null ? "–" : (d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(d * 100).toFixed(1).replace(".", ",") + " ct";
+const cls = d => d == null ? "" : d > 0.0005 ? "bad" : d < -0.0005 ? "good" : "";
+const dDE = s => { const [y,m,d] = s.split("-"); return `${["So","Mo","Di","Mi","Do","Fr","Sa"][new Date(s+"T12:00").getDay()]} ${d}.${m}.`; };
+const set = (id, html, c) => { const e = document.getElementById(id); e.innerHTML = html; if (c !== undefined) e.className = e.className.replace(/\b(good|bad)\b/g, "") + " " + c; };
+
+fetch("data.json", { cache: "no-store" }).then(r => r.json()).then(D => {
+  const n = D.now, hs = D.home_station;
+  const t = new Date(n.ts);
+  set("sub", `${hs.brand || "Heim-Tankstelle"} ${hs.address || ""} · Stand ${t.toLocaleString("de-DE", { weekday:"short", day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit" })} · Umkreis ${D.local_radius_km} km`);
+  set("k-now", eur(n.home));
+  const today = D.daily[D.daily.length - 1];
+  set("k-now-h", today && today.home_min != null ? `Tagestief heute bisher ${eur(today.home_min)} (${today.home_min_time})` : "");
+  const dl = n.home != null && n.local_min != null ? n.home - n.local_min : null;
+  set("k-loc", ct(dl), cls(dl)); set("k-loc-h", `günstigste: ${eur(n.local_min)}`);
+  const db = n.home != null && n.berlin_median != null ? n.home - n.berlin_median : null;
+  set("k-ber", ct(db), cls(db)); set("k-ber-h", `Median ${eur(n.berlin_median)} · Tief ${eur(n.berlin_min)}`);
+  if (n.signal) {
+    const p = n.signal.percentile;
+    set("k-sig", p <= 25 ? "günstig" : p >= 75 ? "teuer" : "mittel", p <= 25 ? "good" : p >= 75 ? "bad" : "");
+    document.getElementById("k-sig-m").style.left = p + "%";
+    set("k-sig-h", `${p} % der Stunden waren günstiger · Spanne ${eur(n.signal.week_min)} – ${eur(n.signal.week_max)}`);
+  } else set("k-sig-h", "noch zu wenig Daten");
+
+  Chart.defaults.color = css("--muted"); Chart.defaults.borderColor = css("--line");
+  Chart.defaults.font.family = "system-ui, sans-serif"; Chart.defaults.animation = false;
+  const yEur = { ticks: { callback: v => v.toFixed(2).replace(".", ",") + " €" } };
+  const tip = { callbacks: { label: c => `${c.dataset.label}: ${eur(c.parsed.y)}` } };
+  const line = (label, data, color, extra = {}) => ({ label, data, borderColor: color, backgroundColor: color, pointRadius: 0, borderWidth: 2, spanGaps: true, ...extra });
+
+  const H = D.hourly_14d;
+  new Chart("c-hourly", { type: "line", data: {
+      labels: H.map(h => { const d = new Date(h.ts); return d.toLocaleString("de-DE", { day:"2-digit", month:"2-digit", hour:"2-digit" }) + " h"; }),
+      datasets: [ line("Heim-Tankstelle", H.map(h => h.home), css("--home"), { stepped: true }),
+                  line("Günstigste Umkreis", H.map(h => h.local_min), css("--local"), { stepped: true }),
+                  line("Berlin Median", H.map(h => h.berlin_median), css("--berlin"), { borderDash: [4,3] }) ] },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false }, plugins: { tooltip: tip },
+               scales: { x: { ticks: { maxTicksLimit: 14, autoSkip: true } }, y: yEur } } });
+
+  const Dd = D.daily;
+  new Chart("c-daily", { type: "line", data: { labels: Dd.map(d => dDE(d.date)),
+      datasets: [ line("Heim-Tankstelle Tief", Dd.map(d => d.home_min), css("--home"), { pointRadius: 2 }),
+                  line("Umkreis Tief", Dd.map(d => d.local_min), css("--local"), { pointRadius: 2 }),
+                  line("Berlin Tief", Dd.map(d => d.berlin_min), css("--good"), { pointRadius: 0, borderWidth: 1.5 }),
+                  line("Berlin Ø Median", Dd.map(d => d.berlin_median_avg), css("--berlin"), { borderDash: [4,3] }) ] },
+    options: { maintainAspectRatio: false, interaction: { mode: "index", intersect: false }, plugins: { tooltip: tip },
+               scales: { x: { ticks: { maxTicksLimit: 15 } }, y: yEur } } });
+
+  const P = D.hour_profile;
+  new Chart("c-profile", { type: "bar", data: { labels: P.map(p => String(p.hour).padStart(2, "0") + " h"),
+      datasets: [ { label: "Heim-Tankstelle", data: P.map(p => p.home_ct), backgroundColor: css("--home") },
+                  { label: "Berlin Median", data: P.map(p => p.berlin_ct), backgroundColor: css("--berlin") } ] },
+    options: { maintainAspectRatio: false, plugins: { tooltip: { callbacks: { label: c => `${c.dataset.label}: ${c.parsed.y > 0 ? "+" : ""}${c.parsed.y.toFixed(1).replace(".", ",")} ct` } } },
+               scales: { y: { ticks: { callback: v => v + " ct" } } } } });
+
+  const rows = Dd.slice(-21).reverse().map(d => `<tr><td>${dDE(d.date)}</td><td>${eur(d.home_min)}</td><td>${d.home_min_time || "–"}</td><td>${eur(d.home_max)}</td><td>${eur(d.home_avg)}</td><td>${eur(d.local_min)}</td><td>${eur(d.berlin_min)}</td><td>${eur(d.berlin_median_avg)}</td></tr>`).join("");
+  document.getElementById("t-daily").innerHTML = `<tr><th>Tag</th><th>Heim Tief</th><th>um</th><th>Heim Hoch</th><th>Heim Ø</th><th>Umkreis Tief</th><th>Berlin Tief</th><th>Berlin Ø Median</th></tr>${rows}`;
+  document.getElementById("t-local").innerHTML = `<tr><th>Tankstelle</th><th style="text-align:left">Adresse</th><th>Entf.</th><th>Preis</th><th>Δ Heim</th></tr>` +
+    n.local_table.map(s => `<tr class="${s.home ? "home" : ""}"><td>${s.brand || "–"}</td><td style="text-align:left">${s.street}</td><td>${s.dist_km != null ? s.dist_km.toFixed(1).replace(".", ",") + " km" : "–"}</td><td>${eur(s.price)}</td><td class="${cls(n.home != null ? s.price - n.home : null)}">${n.home != null ? ct(s.price - n.home) : "–"}</td></tr>`).join("");
+}).catch(e => { document.getElementById("sub").textContent = "Keine Daten gefunden – läuft der GitHub-Workflow schon? (" + e.message + ")"; });
+</script>
+</body>
+</html>
