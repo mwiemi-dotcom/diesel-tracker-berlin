@@ -98,7 +98,8 @@ def main():
         s = stations.get(sid, {})
         table.append({"id": sid, "brand": s.get("brand") or s.get("name"),
                       "street": f"{s.get('street') or ''} {s.get('houseNumber') or ''}".strip(),
-                      "dist_km": s.get("dist_home_km"), "price": p, "home": sid == home_id})
+                      "dist_km": s.get("dist_home_km"), "price": p, "home": sid == home_id,
+                      "lat": s.get("lat"), "lng": s.get("lng")})
 
     hs = stations.get(home_id, {})
     out = {

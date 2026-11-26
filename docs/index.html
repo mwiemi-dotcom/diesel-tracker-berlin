@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Diesel-Tracker Berlin</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Diesel">
+<meta name="theme-color" content="#d9480f">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root { --bg:#f6f7f9; --card:#fff; --ink:#1d232b; --muted:#6b7480; --line:#e3e6ea;
@@ -33,6 +39,11 @@
   tr.home td { color:var(--home); font-weight:600; }
   .scroll { overflow-x:auto; }
   .note { color:var(--muted); font-size:12px; margin-top:8px; }
+  .nav { display:inline-block; padding:2px 8px; border-radius:6px; border:1px solid var(--line); color:var(--local); text-decoration:none; font-size:13px; }
+  .cta { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .cta a { flex:1 1 220px; text-align:center; padding:12px; border-radius:10px; text-decoration:none; font-weight:600; background:var(--card); border:1px solid var(--line); color:var(--ink); }
+  .cta a.best { background:var(--local); color:#fff; border-color:var(--local); }
+  @media (max-width:600px) { .chart { height:220px; } .kpi .val { font-size:24px; } th:nth-child(2), td:nth-child(2) { display:none; } }
 </style>
 </head>
 <body>
@@ -47,6 +58,8 @@
     <div class="card kpi"><div class="label">Einordnung 7 Tage</div><div class="val" id="k-sig">–</div>
       <div class="bar"><i id="k-sig-m" style="left:50%"></i></div><div class="hint" id="k-sig-h"></div></div>
   </div>
+
+  <div class="cta" id="cta"></div>
 
   <div class="card"><h2>Stündlicher Verlauf · 14 Tage</h2><div class="chart"><canvas id="c-hourly"></canvas></div></div>
   <div class="card"><h2>Tagestief pro Tag</h2><div class="chart"><canvas id="c-daily"></canvas></div></div>
@@ -64,6 +77,7 @@ const eur = p => p == null ? "–" : p.toFixed(3).replace(".", ",") + " €";
 const ct = d => d == null ? "–" : (d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(d * 100).toFixed(1).replace(".", ",") + " ct";
 const cls = d => d == null ? "" : d > 0.0005 ? "bad" : d < -0.0005 ? "good" : "";
 const dDE = s => { const [y,m,d] = s.split("-"); return `${["So","Mo","Di","Mi","Do","Fr","Sa"][new Date(s+"T12:00").getDay()]} ${d}.${m}.`; };
+const maps = s => `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=driving`;
 const set = (id, html, c) => { const e = document.getElementById(id); e.innerHTML = html; if (c !== undefined) e.className = e.className.replace(/\b(good|bad)\b/g, "") + " " + c; };
 
 fetch("data.json", { cache: "no-store" }).then(r => r.json()).then(D => {
@@ -92,7 +106,7 @@ fetch("data.json", { cache: "no-store" }).then(r => r.json()).then(D => {
 
   const H = D.hourly_14d;
   new Chart("c-hourly", { type: "line", data: {
-      labels: H.map(h => { const d = new Date(h.ts); return d.toLocaleString("de-DE", { day:"2-digit", month:"2-digit", hour:"2-digit" }) + " h"; }),
+      labels: H.map(h => { const d = new Date(h.ts); return d.toLocaleString("de-DE", { day:"2-digit", month:"2-digit", hour:"2-digit" }); }),
       datasets: [ line("Heim-Tankstelle", H.map(h => h.home), css("--home"), { stepped: true }),
                   line("Günstigste Umkreis", H.map(h => h.local_min), css("--local"), { stepped: true }),
                   line("Berlin Median", H.map(h => h.berlin_median), css("--berlin"), { borderDash: [4,3] }) ] },
@@ -117,8 +131,13 @@ fetch("data.json", { cache: "no-store" }).then(r => r.json()).then(D => {
 
   const rows = Dd.slice(-21).reverse().map(d => `<tr><td>${dDE(d.date)}</td><td>${eur(d.home_min)}</td><td>${d.home_min_time || "–"}</td><td>${eur(d.home_max)}</td><td>${eur(d.home_avg)}</td><td>${eur(d.local_min)}</td><td>${eur(d.berlin_min)}</td><td>${eur(d.berlin_median_avg)}</td></tr>`).join("");
   document.getElementById("t-daily").innerHTML = `<tr><th>Tag</th><th>Heim Tief</th><th>um</th><th>Heim Hoch</th><th>Heim Ø</th><th>Umkreis Tief</th><th>Berlin Tief</th><th>Berlin Ø Median</th></tr>${rows}`;
-  document.getElementById("t-local").innerHTML = `<tr><th>Tankstelle</th><th style="text-align:left">Adresse</th><th>Entf.</th><th>Preis</th><th>Δ Heim</th></tr>` +
-    n.local_table.map(s => `<tr class="${s.home ? "home" : ""}"><td>${s.brand || "–"}</td><td style="text-align:left">${s.street}</td><td>${s.dist_km != null ? s.dist_km.toFixed(1).replace(".", ",") + " km" : "–"}</td><td>${eur(s.price)}</td><td class="${cls(n.home != null ? s.price - n.home : null)}">${n.home != null ? ct(s.price - n.home) : "–"}</td></tr>`).join("");
+  document.getElementById("t-local").innerHTML = `<tr><th>Tankstelle</th><th style="text-align:left">Adresse</th><th>Entf.</th><th>Preis</th><th>Δ Heim</th><th></th></tr>` +
+    n.local_table.map(s => `<tr class="${s.home ? "home" : ""}"><td>${s.brand || "–"}</td><td style="text-align:left">${s.street}</td><td>${s.dist_km != null ? s.dist_km.toFixed(1).replace(".", ",") + " km" : "–"}</td><td>${eur(s.price)}</td><td class="${cls(n.home != null ? s.price - n.home : null)}">${n.home != null ? ct(s.price - n.home) : "–"}</td><td>${s.lat ? `<a class="nav" href="${maps(s)}" target="_blank" rel="noopener">Route</a>` : ""}</td></tr>`).join("");
+  const T = n.local_table, best = T[0], home = T.find(s => s.home);
+  let cta = "";
+  if (best && best.lat) cta += `<a class="best" href="${maps(best)}" target="_blank" rel="noopener">Günstigste: ${best.brand} ${eur(best.price)} → Route</a>`;
+  if (home && home.lat && home !== best) cta += `<a href="${maps(home)}" target="_blank" rel="noopener">Heim-Tankstelle ${eur(home.price)} → Route</a>`;
+  document.getElementById("cta").innerHTML = cta;
 }).catch(e => { document.getElementById("sub").textContent = "Keine Daten gefunden – läuft der GitHub-Workflow schon? (" + e.message + ")"; });
 </script>
 </body>
