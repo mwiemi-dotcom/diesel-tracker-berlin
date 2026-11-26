@@ -12,11 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
 DOCS = ROOT / "docs"
 STATIONS_FILE = DATA / "stations.json"
-LOCAL_FILE = DATA / "local_hourly.csv"      # ts, station_id, price
-BERLIN_FILE = DATA / "berlin_hourly.csv"    # ts, n, min, p25, median, mean
+LOCAL_FILE = DATA / "local_hourly.csv"      # ts, station_id, diesel, e5, e10
+BERLIN_FILE = DATA / "berlin_hourly.csv"    # ts, fuel, n, min, p25, median, mean
 
-LOCAL_COLS = ["ts", "station_id", "price"]
-BERLIN_COLS = ["ts", "n", "min", "p25", "median", "mean"]
+FUELS = ["diesel", "e5", "e10"]
+LOCAL_COLS = ["ts", "station_id", *FUELS]
+BERLIN_COLS = ["ts", "fuel", "n", "min", "p25", "median", "mean"]
 
 
 def load_config():
@@ -42,8 +43,11 @@ def parse_ts(s: str) -> datetime:
 
 
 def is_berlin(st: dict) -> bool:
-    place = (st.get("place") or "").strip().lower()
-    return place.startswith("berlin")
+    return (st.get("place") or "").strip().lower().startswith("berlin")
+
+
+def valid_price(p):
+    return isinstance(p, (int, float)) and not isinstance(p, bool) and p > 0.5
 
 
 def load_stations() -> dict:
@@ -57,8 +61,8 @@ def save_stations(stations: dict):
     STATIONS_FILE.write_text(json.dumps(stations, ensure_ascii=False, indent=1, sort_keys=True), encoding="utf-8")
 
 
-def berlin_stats(prices):
-    prices = sorted(p for p in prices if p and p > 0.5)
+def price_stats(prices):
+    prices = sorted(p for p in prices if valid_price(p))
     if not prices:
         return None
     q = statistics.quantiles(prices, n=4) if len(prices) >= 2 else [prices[0]] * 3
@@ -78,15 +82,29 @@ def read_csv(path: Path):
         return list(csv.DictReader(f))
 
 
-def upsert_csv(path: Path, cols, new_rows, key_fields):
-    """Fügt Zeilen ein; vorhandene Zeilen mit gleichem Schlüssel werden ersetzt."""
-    rows = {tuple(r[k] for k in key_fields): r for r in read_csv(path)}
-    for r in new_rows:
-        rows[tuple(str(r[k]) for k in key_fields)] = {c: r[c] for c in cols}
-    out = sorted(rows.values(), key=lambda r: (parse_ts(r["ts"]), *(r[k] for k in key_fields[1:])))
+def write_csv(path: Path, cols, rows):
     DATA.mkdir(exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
-        w.writerows(out)
+        w.writerows({c: r.get(c, "") for c in cols} for r in rows)
+
+
+def upsert_csv(path: Path, cols, new_rows, key_fields):
+    """Fügt Zeilen ein; vorhandene Zeilen mit gleichem Schlüssel werden ersetzt."""
+    rows = {tuple(r[k] for k in key_fields): r for r in read_csv(path)}
+    for r in new_rows:
+        rows[tuple(str(r[k]) for k in key_fields)] = {c: r.get(c, "") for c in cols}
+    out = sorted(rows.values(), key=lambda r: (parse_ts(r["ts"]), *(r[k] for k in key_fields[1:])))
+    write_csv(path, cols, out)
     return len(out)
+
+
+def migrate():
+    """Altes Format (nur Diesel) auf Mehr-Kraftstoff-Format umstellen."""
+    loc = read_csv(LOCAL_FILE)
+    if loc and "price" in loc[0]:
+        write_csv(LOCAL_FILE, LOCAL_COLS, [{"ts": r["ts"], "station_id": r["station_id"], "diesel": r["price"]} for r in loc])
+    ber = read_csv(BERLIN_FILE)
+    if ber and "fuel" not in ber[0]:
+        write_csv(BERLIN_FILE, BERLIN_COLS, [{**r, "fuel": "diesel"} for r in ber])

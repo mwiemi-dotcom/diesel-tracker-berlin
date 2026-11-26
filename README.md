@@ -1,37 +1,21 @@
-# Diesel-Tracker Berlin
+# Sprit-Tracker Berlin
 
-Stündlicher Dieselpreis-Abgleich für eine Heim-Tankstelle, deren Umkreis (5 km) und ganz Berlin – mit Tagestiefs, Wochenverlauf und typischem Tagesprofil.
+Stündlicher Abgleich der Spritpreise (Diesel, Super E5, E10) für eine Heim-Tankstelle, deren Umkreis (5 km) und ganz Berlin – mit Tagestiefs, Wochenverlauf und typischem Tagesprofil. Dazu eine Umkreissuche für beliebige Adressen in Berlin und Ladesäulen.
 
-Datenquelle: Markttransparenzstelle für Kraftstoffe (MTS-K) via [Tankerkönig](https://creativecommons.tankerkoenig.de), Lizenz CC BY 4.0.
+**Dashboard:** https://mwiemi-dotcom.github.io/diesel-tracker-berlin/ (am Handy „Zum Home-Bildschirm“ hinzufügen)
 
-## Einrichtung (einmalig, ~5 Minuten)
+## So funktioniert es
 
-1. **Repo anlegen** (z. B. `diesel-tracker-berlin`) und diesen Ordner hochladen bzw. pushen.
-2. **Secret anlegen:** Settings → Secrets and variables → Actions → *New repository secret*
-   - `TK_API_KEY` = dein Tankerkönig-API-Key
-   - optional `TK_GIT_USER` / `TK_GIT_PASS`, falls das Historien-Archiv einen Login verlangt
-3. **Erster Lauf:** Actions → „Dieselpreise stündlich“ → *Run workflow*.
-   Prüfe im Log, ob die richtige Heim-Tankstelle erkannt wurde.
-4. **Historie nachladen:** Actions → „Historie nachladen (Backfill)“ → *Run workflow* (Standard: 60 Tage).
-5. **Dashboard:** Settings → Pages → Source *Deploy from a branch*, Branch `main`, Ordner `/docs`.
-   (Pages bei privaten Repos braucht GitHub Pro – alternativ das Repo öffentlich machen; es enthält nur öffentliche Preisdaten, der API-Key liegt geschützt im Secret.)
+- GitHub Actions ruft jede Stunde die Tankerkönig-API ab (Secret `TK_API_KEY`), speichert die Werte in `data/` und baut `docs/data.json` (Verlauf) und `docs/latest.json` (Momentaufnahme aller Tankstellen im Raum Berlin).
+- Das Dashboard (`docs/index.html`, GitHub Pages) zeigt den Verlauf der Heim-Tankstelle und filtert die Momentaufnahme nach Adresse/Standort, Radius und Kraftstoff. Suchen werden nicht gespeichert – beim Neuladen ist wieder die Heim-Tankstelle eingestellt.
+- Ladesäulen kommen live aus OpenStreetMap (Overpass), ohne Preise.
 
-Danach läuft alles automatisch: jede Stunde ein neuer Datenpunkt, das Dashboard aktualisiert sich mit.
+## Anpassen (`config.json`)
 
-## Anpassen
+- `home_station_id`: Tankerkönig-ID der Heim-Tankstelle (siehe `data/stations.json`)
+- `local_radius_km`: Umkreis für den Verlauf
+- `home`: Mittelpunkt für den Umkreis
 
-`config.json`:
-- `home_station_id`: feste Tankstellen-ID (steht nach dem ersten Lauf in `data/stations.json`), sonst automatische Erkennung über `home_station_match`
-- `local_radius_km`: Umkreis für den Nachbarschaftsvergleich
-- `backfill_days`: Standard-Tiefe für den Backfill
+## Quellen
 
-## Dateien
-
-| Datei | Inhalt |
-|---|---|
-| `data/berlin_hourly.csv` | je Stunde: Anzahl, Min, 25 %-Quantil, Median, Mittel aller geöffneten Berliner Tankstellen |
-| `data/local_hourly.csv` | je Stunde und Tankstelle im Umkreis: Dieselpreis |
-| `data/stations.json` | Stammdaten der Tankstellen |
-| `docs/data.json` | verdichtete Daten fürs Dashboard |
-
-Hinweise: GitHub startet Cron-Jobs teils ein paar Minuten verspätet. Die Live-Werte zählen nur geöffnete Tankstellen, die rekonstruierte Historie kennt keine Öffnungszeiten.
+Markttransparenzstelle für Kraftstoffe via Tankerkönig (CC BY 4.0) · © OpenStreetMap-Mitwirkende (ODbL) · Nominatim
