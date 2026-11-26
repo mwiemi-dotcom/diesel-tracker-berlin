@@ -4,10 +4,10 @@
     "lat": 52.48,
     "lng": 13.52
   },
-  "home_station_id": null,
+  "home_station_id": "eb122029-e957-4417-b06d-5d2d168e05a2",
   "home_station_match": {
     "brand": "shell",
-    "street": "blockdamm"
+    "street": ""
   },
   "local_radius_km": 5,
   "berlin": {
